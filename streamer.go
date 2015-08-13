@@ -6,9 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 )
 
 type Streamer struct {
@@ -17,14 +15,17 @@ type Streamer struct {
 	LogOut, LogErr io.WriteCloser
 	Out, Err       *log.Logger
 	Notify         bool
+	demo           bool
 }
 
-func NewStreamer(settings *Settings) (*Streamer, error) {
+func NewStreamer(settings *Settings, demo bool) (*Streamer, error) {
 	if err := settings.validate(); err != nil {
-		return nil, err
+		if !(err == ErrNoStreamKey && demo) {
+			return nil, err
+		}
 	}
 
-	st := &Streamer{Settings: settings}
+	st := &Streamer{Settings: settings, demo: demo}
 
 	err := st.getLogs()
 	if err != nil {
@@ -38,9 +39,9 @@ func NewStreamer(settings *Settings) (*Streamer, error) {
 }
 
 func (st *Streamer) buildCmd() {
-	cmd := exec.Command("ffmpeg",
+	opts := []string{
 		"-f", "x11grab",
-		"-s", st.Settings.InRes,
+		"-s", st.Settings.Res,
 		"-r", fmt.Sprint(st.Settings.FPS),
 		"-i", ":0.0",
 		"-f", "alsa",
@@ -49,28 +50,53 @@ func (st *Streamer) buildCmd() {
 		"-ac", "2",
 		"-ar", fmt.Sprint(st.Settings.AudioRate),
 		"-vcodec", "libx264",
-		"-g", fmt.Sprint(st.Settings.FPS*2),
+		"-g", fmt.Sprint(st.Settings.FPS * 2),
 		"-keyint_min", fmt.Sprint(st.Settings.FPS),
-		"-b:v", fmt.Sprint(st.Settings.CBR),
-		"-minrate", fmt.Sprint(st.Settings.CBR),
-		"-maxrate", fmt.Sprint(st.Settings.CBR),
+		"-b:v", fmt.Sprintf("%dk", st.Settings.CBR),
+		"-minrate", fmt.Sprintf("%dk", st.Settings.CBR),
+		"-maxrate", fmt.Sprintf("%dk", st.Settings.CBR),
 		"-pix_fmt", "yuv420p",
-		"-s", st.Settings.OutRes,
+		"-s", st.Settings.Res,
 		"-preset", st.Settings.Quality,
 		"-tune", "film",
 		"-acodec", "libmp3lame",
 		"-threads", fmt.Sprint(st.Settings.Threads),
 		"-strict", "normal",
-		"-bufsize", fmt.Sprint(st.Settings.CBR),
+		"-bufsize", fmt.Sprintf("%dk", st.Settings.CBR),
 		"-loglevel", st.Settings.LogLevel,
-		fmt.Sprintf("rtmp://%s.twitch.tv/app/%s", st.Settings.Server, st.Settings.StreamKey),
+	}
+
+	if st.demo {
+		opts = append(opts, "-")
+	} else {
+		opts = append(opts, fmt.Sprintf("rtmp://%s.twitch.tv/app/%s", st.Settings.Server, st.Settings.StreamKey))
+	}
+
+	cmd := exec.Command("ffmpeg",
+		opts...,
 	)
+
+	// fmt.Println(strings.Join(cmd.Args, " "))
+	// os.Exit(1)
 
 	st.Cmd = cmd
 }
 
 func (st *Streamer) run() error {
-	st.Cmd.Stdout = st.LogOut
+	if st.demo {
+		mplayer := exec.Command("mplayer", "-")
+		mpIn, err := mplayer.StdinPipe()
+		if err != nil {
+			return err
+		}
+		st.Cmd.Stdout = mpIn
+		mplayer.Stdout = st.LogOut
+		mplayer.Stderr = st.LogErr
+		mplayer.Start()
+	} else {
+		st.Cmd.Stdout = st.LogOut
+	}
+
 	st.Cmd.Stderr = st.LogErr
 
 	defer func() {
@@ -78,18 +104,11 @@ func (st *Streamer) run() error {
 		st.LogErr.Close()
 	}()
 
-	sigs := make(chan os.Signal, 8)
-	signal.Notify(sigs, os.Interrupt, os.Kill, syscall.SIGTERM)
-
 	st.notify("Starting streamit!")
 	err := st.Cmd.Start()
 	if err != nil {
 		return err
 	}
-
-	go func() {
-		st.Cmd.Process.Signal(<-sigs)
-	}()
 
 	err = st.Cmd.Wait()
 	st.notify("Streamit exited!")

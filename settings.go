@@ -15,6 +15,7 @@ var (
 		"$HOME/.streamit/settings.json",
 	}
 	ErrNewSettingsFile = errors.New("new settings file created")
+	ErrNoStreamKey     = errors.New("missing stream_key")
 )
 
 // INRES="1920x1080" # input resolution
@@ -30,8 +31,7 @@ var (
 // SERVER="live-lax" # twitch server in LA, see http://bashtech.net/twitch/ingest.php for list
 
 type Settings struct {
-	InRes     string `json:"in_res"`
-	OutRes    string `json:"out_res"`
+	Res       string `json:"res"`
 	FPS       int    `json:"fps"`
 	Threads   int    `json:"threads"`
 	CBR       int    `json:"cbr"`
@@ -53,7 +53,7 @@ func (s *Settings) validate() error {
 	}
 
 	if s.StreamKey == "" {
-		return errors.New("missing stream_key")
+		return ErrNoStreamKey
 	}
 
 	return nil
@@ -61,8 +61,7 @@ func (s *Settings) validate() error {
 
 func DefaultSettings() *Settings {
 	return &Settings{
-		InRes:     "1920x1080",
-		OutRes:    "1920x1080",
+		Res:       "1920x1080",
 		FPS:       15,
 		Threads:   2,
 		CBR:       1000,
